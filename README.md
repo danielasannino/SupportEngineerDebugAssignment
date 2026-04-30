@@ -1,3 +1,30 @@
+
+Issues confirmed and fixed:
+
+Create-task 500 (confirmed) — POST /api/tasks threw System.FormatException when the X-Client-Timestamp header was absent. Fixed by replacing DateTime.Parse with DateTime.TryParse and a DateTime.UtcNow fallback, and moving input validation before timestamp parsing.
+
+Slow task list (confirmed) — The list endpoint loaded every row in the Tasks table into memory before filtering by userId. Fixed by pushing Where, OrderBy, and Take into the EF Core query so the database does the work.
+
+Ordering instability (confirmed) — Tasks with identical CreatedAt values sorted non-deterministically. Fixed by adding .ThenByDescending(t => t.Id) as a stable tiebreaker.
+
+Test suite not compiling (fixed) — Missing using Xunit; directive in TaskApiTests.cs prevented the test file from compiling.
+
+How I used logs to diagnose:
+artifacts/sample_api_log.txt showed a structured log line immediately before the exception: X-Client-Timestamp present=False length=0. That single field told me the header was absent, not malformed — which meant the fix was a fallback, not stricter validation. The FormatException stack trace then confirmed the exact crash site (TaskEndpoints.cs line 41). I did not need to reproduce the bug locally; the log was sufficient to identify the root cause and write the fix.
+
+artifacts/sample_slow_list_log.txt showed elapsedMs scaling with limit and implicitly with total data volume (1847ms for user-015 vs ~300ms for earlier users). That pointed to a full-table scan rather than a per-user problem.
+
+Tradeoffs:
+
+The timestamp fallback to UtcNow silently accepts requests without the header rather than returning a 400. This preserves compatibility with clients that don't send it. If the timestamp is semantically meaningful (e.g. for deduplication), a 400 would be safer — noted in the incident follow-up.
+The ThenByDescending(t.Id) tiebreaker stabilises ordering but doesn't investigate the client-side "duplicate" report. I flagged it as a likely frontend state issue in the incident doc.
+What I'd do next with more time:
+
+Add the Tasks(UserId) database index (tracked in TICKET.md) — the query fix prevents the full-scan but without an index performance will degrade again as data grows.
+Add a test case for POST /api/tasks without the X-Client-Timestamp header to lock in the fix.
+Investigate the frontend rendering for the "duplicates" report — no server-side duplication was found but the symptom hasn't been fully ruled out.
+
+
 # Support Engineer Challenge — Debug & Stabilize
 
 This repo contains a small prebuilt app with a few realistic "production" issues. Your goal is to **triage**, **diagnose**, and **ship safe fixes** with clear communication.
